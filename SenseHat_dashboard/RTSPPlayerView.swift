@@ -76,7 +76,7 @@ struct RTSPPlayerView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ uiView: PlayerContainerView, coordinator: Coordinator) {
-        coordinator.stop()
+        coordinator.dismantle()
     }
 
     final class Coordinator: NSObject, VLCMediaPlayerDelegate {
@@ -90,6 +90,7 @@ struct RTSPPlayerView: UIViewRepresentable {
         private var hasReportedVideoOutput = false
         private var shouldRetryCurrentURL = false
         private var reconnectAttemptCount = 0
+        private var isDismantled = false
         var onStateChange: (@MainActor (RTSPPlaybackState, String) -> Void)?
 
         override init() {
@@ -101,7 +102,15 @@ struct RTSPPlayerView: UIViewRepresentable {
             mediaPlayer.drawable = nil
         }
 
+        deinit {
+            dismantle()
+        }
+
         func attach(to view: PlayerContainerView) {
+            guard !isDismantled else {
+                return
+            }
+
             guard containerView !== view else {
                 return
             }
@@ -111,6 +120,10 @@ struct RTSPPlayerView: UIViewRepresentable {
         }
 
         func updateStream(urlString: String?, reloadToken: Int) {
+            guard !isDismantled else {
+                return
+            }
+
             let trimmedURL = urlString?.trimmingCharacters(in: .whitespacesAndNewlines)
 
             guard let trimmedURL, !trimmedURL.isEmpty else {
@@ -143,6 +156,10 @@ struct RTSPPlayerView: UIViewRepresentable {
         }
 
         func stop() {
+            guard !isDismantled else {
+                return
+            }
+
             shouldRetryCurrentURL = false
             currentReloadToken = nil
             resetPlaybackWithoutReporting()
@@ -151,7 +168,33 @@ struct RTSPPlayerView: UIViewRepresentable {
             }
         }
 
+        func dismantle() {
+            guard !isDismantled else {
+                return
+            }
+
+            isDismantled = true
+            shouldRetryCurrentURL = false
+            currentURL = nil
+            currentReloadToken = nil
+            onStateChange = nil
+            noVideoOutputTask?.cancel()
+            noVideoOutputTask = nil
+            reconnectTask?.cancel()
+            reconnectTask = nil
+            hasReportedVideoOutput = false
+            mediaPlayer.delegate = nil
+            mediaPlayer.drawable = nil
+            mediaPlayer.stop()
+            mediaPlayer.media = nil
+            containerView = nil
+        }
+
         func mediaPlayerStateChanged(_ aNotification: Notification) {
+            guard !isDismantled else {
+                return
+            }
+
             let targetDescription = currentURL ?? "the stream"
 
             switch mediaPlayer.state {
@@ -193,6 +236,10 @@ struct RTSPPlayerView: UIViewRepresentable {
         }
 
         func mediaPlayerTimeChanged(_ aNotification: Notification) {
+            guard !isDismantled else {
+                return
+            }
+
             selectVideoTrackIfNeeded()
 
             guard mediaPlayer.hasVideoOut else {
@@ -204,6 +251,10 @@ struct RTSPPlayerView: UIViewRepresentable {
         }
 
         private func selectVideoTrackIfNeeded() {
+            guard !isDismantled else {
+                return
+            }
+
             guard mediaPlayer.currentVideoTrackIndex == -1 else {
                 return
             }
@@ -231,7 +282,7 @@ struct RTSPPlayerView: UIViewRepresentable {
                 }
 
                 try? await Task.sleep(nanoseconds: RTSPPlayerConfiguration.noVideoOutputGracePeriodNanoseconds)
-                guard !Task.isCancelled else {
+                guard !Task.isCancelled, !self.isDismantled else {
                     return
                 }
 
@@ -276,11 +327,19 @@ struct RTSPPlayerView: UIViewRepresentable {
 
         private func report(_ state: RTSPPlaybackState, _ message: String) {
             Task { @MainActor in
+                guard !self.isDismantled else {
+                    return
+                }
+
                 onStateChange?(state, message)
             }
         }
 
         private func openStream(url: URL, description: String) {
+            guard !isDismantled else {
+                return
+            }
+
             resetPlaybackWithoutReporting()
             report(.opening, reconnectAttemptCount == 0 ? "Opening stream from \(description)" : "Retrying stream from \(description) (\(reconnectAttemptCount + 1)/\(RTSPPlayerConfiguration.maximumReconnectAttempts + 1))")
 
@@ -294,6 +353,10 @@ struct RTSPPlayerView: UIViewRepresentable {
 
         @discardableResult
         private func scheduleReconnectIfNeeded(for targetDescription: String, afterError: Bool) -> Bool {
+            guard !isDismantled else {
+                return false
+            }
+
             guard shouldRetryCurrentURL, !hasReportedVideoOutput, let currentURL else {
                 return false
             }
@@ -318,7 +381,7 @@ struct RTSPPlayerView: UIViewRepresentable {
                 }
 
                 try? await Task.sleep(nanoseconds: RTSPPlayerConfiguration.reconnectDelayNanoseconds)
-                guard !Task.isCancelled, self.shouldRetryCurrentURL, self.currentURL == currentURL else {
+                guard !Task.isCancelled, !self.isDismantled, self.shouldRetryCurrentURL, self.currentURL == currentURL else {
                     return
                 }
 
@@ -333,6 +396,10 @@ struct RTSPPlayerView: UIViewRepresentable {
         }
 
         private func resetPlaybackWithoutReporting() {
+            guard !isDismantled else {
+                return
+            }
+
             noVideoOutputTask?.cancel()
             noVideoOutputTask = nil
             reconnectTask?.cancel()

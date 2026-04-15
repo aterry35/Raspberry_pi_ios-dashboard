@@ -62,8 +62,16 @@ final class SimpleMQTTClient {
 
             let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: .tcp)
             self.connection = connection
-            connection.stateUpdateHandler = { [weak self] state in
-                self?.handleConnectionState(state)
+            connection.stateUpdateHandler = { [weak self, weak connection] state in
+                guard
+                    let self,
+                    let connection,
+                    self.connection === connection
+                else {
+                    return
+                }
+
+                self.handleConnectionState(state, connection: connection)
             }
             connection.start(queue: self.queue)
         }
@@ -104,11 +112,11 @@ final class SimpleMQTTClient {
         }
     }
 
-    private func handleConnectionState(_ state: NWConnection.State) {
+    private func handleConnectionState(_ state: NWConnection.State, connection: NWConnection) {
         switch state {
         case .ready:
             log("TCP connection established with \(currentHost):\(currentPort).")
-            startReceiveLoop()
+            startReceiveLoop(connection: connection)
             sendConnectPacket()
 
         case .failed(let error):
@@ -155,9 +163,13 @@ final class SimpleMQTTClient {
         existingConnection?.cancel()
     }
 
-    private func startReceiveLoop() {
-        connection?.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self] data, _, isComplete, error in
-            guard let self else {
+    private func startReceiveLoop(connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self, weak connection] data, _, isComplete, error in
+            guard
+                let self,
+                let connection,
+                self.connection === connection
+            else {
                 return
             }
 
@@ -180,7 +192,7 @@ final class SimpleMQTTClient {
                 return
             }
 
-            self.startReceiveLoop()
+            self.startReceiveLoop(connection: connection)
         }
     }
 

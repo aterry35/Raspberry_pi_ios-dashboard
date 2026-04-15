@@ -54,16 +54,25 @@ struct HTTPStreamView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
-        coordinator.stop()
+        coordinator.dismantle()
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         private weak var webView: WKWebView?
         private var currentURL: String?
         private var currentReloadToken: Int?
+        private var isDismantled = false
         var onStateChange: (@MainActor (HTTPStreamState, String) -> Void)?
 
+        deinit {
+            dismantle()
+        }
+
         func attach(to webView: WKWebView) {
+            guard !isDismantled else {
+                return
+            }
+
             guard self.webView !== webView else {
                 return
             }
@@ -73,6 +82,10 @@ struct HTTPStreamView: UIViewRepresentable {
         }
 
         func update(urlString: String?, reloadToken: Int) {
+            guard !isDismantled else {
+                return
+            }
+
             let trimmedURL = urlString?.trimmingCharacters(in: .whitespacesAndNewlines)
 
             guard let webView else {
@@ -107,22 +120,56 @@ struct HTTPStreamView: UIViewRepresentable {
         }
 
         func stop() {
+            guard !isDismantled else {
+                return
+            }
+
             webView?.stopLoading()
         }
 
+        func dismantle() {
+            guard !isDismantled else {
+                return
+            }
+
+            isDismantled = true
+            webView?.stopLoading()
+            webView?.navigationDelegate = nil
+            webView = nil
+            currentURL = nil
+            currentReloadToken = nil
+            onStateChange = nil
+        }
+
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            guard !isDismantled, self.webView === webView else {
+                return
+            }
+
             report(.loading, "Loading camera feed from \(currentURL ?? "the configured URL").")
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard !isDismantled, self.webView === webView else {
+                return
+            }
+
             report(.loaded, "Displaying the HTTP camera feed from \(currentURL ?? "the configured URL").")
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            guard !isDismantled, self.webView === webView else {
+                return
+            }
+
             reportFailure(error)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            guard !isDismantled, self.webView === webView else {
+                return
+            }
+
             reportFailure(error)
         }
 
@@ -138,6 +185,10 @@ struct HTTPStreamView: UIViewRepresentable {
 
         private func report(_ state: HTTPStreamState, _ message: String) {
             Task { @MainActor in
+                guard !self.isDismantled else {
+                    return
+                }
+
                 onStateChange?(state, message)
             }
         }

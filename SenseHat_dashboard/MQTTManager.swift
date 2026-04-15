@@ -14,11 +14,11 @@ final class MQTTManager: ObservableObject {
     let senseHatControlTopic = "sensehat/pi3/control"
     let senseHatStatusTopic = "sensehat/pi3/status"
     let piMonitorStatusTopic = "pi3/monitor/status"
-    let ledMatrixControlTopic = "led_matrix/pi3/control"
-    let ledMatrixStatusTopic = "led_matrix/pi3/status"
     let smartCamControlTopic = "smartcam/pi3/control"
     let smartCamStatusTopic = "smartcam/pi3/status"
     let smartCamPersonTopic = "smartcam/pi3/person"
+    let cameraPanTopic = "camera/pan"
+    let cameraTiltTopic = "camera/tilt"
     let publishIntervalSeconds = 5
 
     @Published private(set) var connectionTitle: String = "Disconnected"
@@ -30,10 +30,10 @@ final class MQTTManager: ObservableObject {
     @Published private(set) var lastRawPayload: String?
     @Published private(set) var lastDecodeError: String?
     @Published private(set) var lastSentCommand: String?
-    @Published private(set) var ledMatrixState: String = "idle"
-    @Published private(set) var ledMatrixMode: String = "none"
-    @Published private(set) var ledMatrixStatusDetail: String = "Use the snake controls to talk to the LED matrix service."
-    @Published private(set) var ledMatrixLastStatusPayload: String?
+    @Published private(set) var snakeState: String = "idle"
+    @Published private(set) var snakeMode: String = "snake"
+    @Published private(set) var snakeStatusDetail: String = "Use the Sense HAT controls to start or stop the snake game."
+    @Published private(set) var snakeLastStatusPayload: String?
     @Published private(set) var smartCamStreamState: String = "standby"
     @Published private(set) var smartCamStatusDetail: String = "Open the RTSP tab to connect to MQTT and control the SmartCam stream."
     @Published private(set) var smartCamRTSPURL: String?
@@ -121,6 +121,7 @@ final class MQTTManager: ObservableObject {
         let handler: String?
         let result: SenseHatStatusResult?
         let reading: SenseHatReading?
+        let mode: String?
         let ts: String?
     }
 
@@ -130,19 +131,6 @@ final class MQTTManager: ObservableObject {
         let ok: Bool?
         let action: String?
         let text: String?
-    }
-
-    private struct LEDMatrixStatusEnvelope: Decodable {
-        let state: String?
-        let topic: String?
-        let handler: String?
-        let result: LEDMatrixStatusResult?
-        let mode: String?
-        let ts: String?
-    }
-
-    private struct LEDMatrixStatusResult: Decodable {
-        let state: String?
         let mode: String?
     }
 
@@ -206,8 +194,8 @@ final class MQTTManager: ObservableObject {
         publishSenseHatControl(payload: #"{"action":"read_once"}"#, actionLabel: "read_once")
     }
 
-    func lightsOn() {
-        publishSenseHatControl(payload: #"{"action":"lights_on"}"#, actionLabel: "lights_on")
+    func blinkSenseHat() {
+        publishSenseHatControl(payload: #"{"action":"blink"}"#, actionLabel: "blink")
     }
 
     func lightsOff() {
@@ -219,20 +207,33 @@ final class MQTTManager: ObservableObject {
     }
 
     func startSnakeGame() {
-        publishLEDMatrixControl(payload: #"{"action":"snake"}"#, actionLabel: "snake")
-        ledMatrixState = "requested"
-        ledMatrixStatusDetail = "Requested snake mode on \(ledMatrixControlTopic). Waiting for \(ledMatrixStatusTopic)."
+        publishSenseHatControl(payload: #"{"action":"start_snake"}"#, actionLabel: "start_snake")
+        snakeState = "requested"
+        snakeMode = "snake"
+        snakeStatusDetail = "Requested start_snake on \(senseHatControlTopic). Waiting for \(senseHatStatusTopic)."
     }
 
     func stopSnakeGame() {
-        publishLEDMatrixControl(payload: #"{"action":"stop"}"#, actionLabel: "stop")
-        ledMatrixState = "stopping"
-        ledMatrixStatusDetail = "Requested stop on \(ledMatrixControlTopic). Waiting for \(ledMatrixStatusTopic)."
+        publishSenseHatControl(payload: #"{"action":"stop_snake"}"#, actionLabel: "stop_snake")
+        snakeState = "stopping"
+        snakeMode = "snake"
+        snakeStatusDetail = "Requested stop_snake on \(senseHatControlTopic). Waiting for \(senseHatStatusTopic)."
     }
 
-    func requestSnakeStatus() {
-        publishLEDMatrixControl(payload: #"{"action":"status"}"#, actionLabel: "status")
-        ledMatrixStatusDetail = "Requested LED matrix status on \(ledMatrixControlTopic)."
+    func panCameraLeft() {
+        publishCameraControl(topic: cameraPanTopic, payload: "left", actionLabel: "pan left")
+    }
+
+    func panCameraRight() {
+        publishCameraControl(topic: cameraPanTopic, payload: "right", actionLabel: "pan right")
+    }
+
+    func tiltCameraUp() {
+        publishCameraControl(topic: cameraTiltTopic, payload: "up", actionLabel: "tilt up")
+    }
+
+    func tiltCameraDown() {
+        publishCameraControl(topic: cameraTiltTopic, payload: "down", actionLabel: "tilt down")
     }
 
     func showTime() {
@@ -362,26 +363,26 @@ final class MQTTManager: ObservableObject {
         appendLog("Published Sense HAT action '\(actionLabel)' to \(senseHatControlTopic).")
     }
 
-    private func publishLEDMatrixControl(payload: String, actionLabel: String) {
-        guard isConnected else {
-            queuePendingControlPublish(
-                topic: ledMatrixControlTopic,
-                payload: payload,
-                actionLabel: "LED matrix \(actionLabel)"
-            )
-            return
-        }
-
-        client.publish(topic: ledMatrixControlTopic, string: payload)
-        lastSentCommand = "\(ledMatrixControlTopic) <- \(payload)"
-        appendLog("Published LED matrix action '\(actionLabel)' to \(ledMatrixControlTopic).")
-    }
-
     private func queuePendingControlPublish(topic: String, payload: String, actionLabel: String) {
         pendingControlPublishes.append(
             PendingControlPublish(topic: topic, payload: payload, actionLabel: actionLabel)
         )
         appendLog("Queued \(actionLabel) until the MQTT session is connected.")
+    }
+
+    private func publishCameraControl(topic: String, payload: String, actionLabel: String) {
+        guard isConnected else {
+            queuePendingControlPublish(
+                topic: topic,
+                payload: payload,
+                actionLabel: "camera \(actionLabel)"
+            )
+            return
+        }
+
+        client.publish(topic: topic, string: payload)
+        lastSentCommand = "\(topic) <- \(payload)"
+        appendLog("Published camera action '\(actionLabel)' to \(topic).")
     }
 
     private func makeJSONString(from object: [String: String]) -> String? {
@@ -416,11 +417,10 @@ final class MQTTManager: ObservableObject {
         case .connected(let host, let port):
             activeBrokerSummary = "\(host):\(port)"
             connectionTitle = "Connected"
-            connectionDetail = "Subscribed to \(senseHatStatusTopic), \(ledMatrixStatusTopic), \(smartCamStatusTopic), and \(piMonitorStatusTopic) on \(activeBrokerSummary)."
+            connectionDetail = "Subscribed to \(senseHatStatusTopic), \(smartCamStatusTopic), and \(piMonitorStatusTopic) on \(activeBrokerSummary)."
             connectionTint = .green
             connectionIconName = "bolt.horizontal.circle.fill"
             client.subscribe(topic: senseHatStatusTopic)
-            client.subscribe(topic: ledMatrixStatusTopic)
             client.subscribe(topic: piMonitorStatusTopic)
             client.subscribe(topic: smartCamStatusTopic)
             flushPendingControlPublishes()
@@ -438,9 +438,6 @@ final class MQTTManager: ObservableObject {
         switch message.topic {
         case senseHatStatusTopic:
             handleSenseHatStatusMessage(message)
-
-        case ledMatrixStatusTopic:
-            handleLEDMatrixStatusMessage(message)
 
         case piMonitorStatusTopic:
             handlePiMonitorStatusMessage(message)
@@ -464,11 +461,28 @@ final class MQTTManager: ObservableObject {
                 latestReading = reading
                 lastDecodeError = nil
                 appendLog("Sense HAT status updated: \(reading.summary).")
-                return
             }
 
             let resultState = status.result?.state ?? status.state ?? "unknown"
-            appendLog("Sense HAT status '\(resultState)' did not include a sensor reading.")
+            let snakeModeValue = (status.result?.mode ?? status.mode ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if shouldTreatAsSnakeStatus(resultState: resultState, mode: snakeModeValue) {
+                let normalizedState = resultState.trimmingCharacters(in: .whitespacesAndNewlines)
+                snakeState = normalizedState.isEmpty ? "unknown" : normalizedState
+                snakeMode = snakeModeValue.isEmpty ? "snake" : snakeModeValue
+                snakeLastStatusPayload = rawPayload
+                snakeStatusDetail = snakeDetailMessage(
+                    for: snakeState,
+                    mode: snakeMode,
+                    timestamp: status.ts
+                )
+                appendLog("Snake status updated: \(snakeStatusDetail)")
+                return
+            }
+
+            if status.result?.reading == nil, status.reading == nil {
+                appendLog("Sense HAT status '\(resultState)' did not include a sensor reading.")
+            }
         } catch {
             lastDecodeError = error.localizedDescription
             appendLog("Sense HAT status decode failed: \(error.localizedDescription)")
@@ -493,30 +507,6 @@ final class MQTTManager: ObservableObject {
             client.publish(topic: publish.topic, string: publish.payload)
             lastSentCommand = "\(publish.topic) <- \(publish.payload)"
             appendLog("Flushed queued \(publish.actionLabel) to \(publish.topic).")
-        }
-    }
-
-    private func handleLEDMatrixStatusMessage(_ message: SimpleMQTTClient.Message) {
-        let rawPayload = String(decoding: message.payload, as: UTF8.self)
-        ledMatrixLastStatusPayload = rawPayload
-
-        do {
-            let status = try decoder.decode(LEDMatrixStatusEnvelope.self, from: message.payload)
-            let resultState = (status.result?.state ?? status.state ?? "unknown").trimmingCharacters(in: .whitespacesAndNewlines)
-            let mode = (status.result?.mode ?? status.mode ?? "none").trimmingCharacters(in: .whitespacesAndNewlines)
-
-            ledMatrixState = resultState.isEmpty ? "unknown" : resultState
-            ledMatrixMode = mode.isEmpty ? "none" : mode
-            ledMatrixStatusDetail = ledMatrixDetailMessage(
-                for: ledMatrixState,
-                mode: ledMatrixMode,
-                timestamp: status.ts
-            )
-            appendLog("LED matrix status updated: \(ledMatrixStatusDetail)")
-        } catch {
-            ledMatrixState = "decode_error"
-            ledMatrixStatusDetail = "LED matrix status decode failed: \(error.localizedDescription)"
-            appendLog("LED matrix status decode failed: \(error.localizedDescription)")
         }
     }
 
@@ -604,21 +594,41 @@ final class MQTTManager: ObservableObject {
         }
     }
 
-    private func ledMatrixDetailMessage(for state: String, mode: String, timestamp: String?) -> String {
+    private func snakeDetailMessage(for state: String, mode: String, timestamp: String?) -> String {
         let suffix = timestamp.map { " (\($0))" } ?? ""
-        let modeSuffix = mode == "none" || mode.isEmpty ? "" : " in \(mode) mode"
+        let modeSuffix = mode.isEmpty ? "" : " in \(mode) mode"
 
         switch state {
         case "waiting_start":
-            return "LED matrix is waiting to start\(modeSuffix)\(suffix)."
+            return "Snake game is waiting to start\(modeSuffix)\(suffix)."
         case "already_running":
-            return "LED matrix said the game is already running\(modeSuffix)\(suffix)."
+            return "Snake game is already running\(modeSuffix)\(suffix)."
         case "stopped":
-            return "LED matrix reported the game is stopped\(suffix)."
+            return "Snake game is stopped\(suffix)."
         case "requested", "stopping":
-            return ledMatrixStatusDetail
+            return snakeStatusDetail
         default:
-            return "LED matrix status changed to '\(state)'\(modeSuffix)\(suffix)."
+            return "Snake status changed to '\(state)'\(modeSuffix)\(suffix)."
+        }
+    }
+
+    private func shouldTreatAsSnakeStatus(resultState: String, mode: String) -> Bool {
+        let normalizedState = resultState.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedMode = mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        if normalizedMode == "snake" {
+            return true
+        }
+
+        if !normalizedMode.isEmpty {
+            return false
+        }
+
+        switch normalizedState {
+        case "waiting_start", "already_running", "requested", "stopping":
+            return true
+        default:
+            return false
         }
     }
 

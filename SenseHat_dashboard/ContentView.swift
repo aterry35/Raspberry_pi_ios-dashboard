@@ -26,13 +26,21 @@ private enum DashboardPalette {
     static let violet = Color(red: 0.58, green: 0.43, blue: 0.96)
     static let rose = Color(red: 0.95, green: 0.38, blue: 0.60)
     static let slate = Color(red: 0.50, green: 0.60, blue: 0.75)
+    static let fieldFill = LinearGradient(
+        colors: [
+            Color.white.opacity(0.08),
+            Color.black.opacity(0.18)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
 }
 
 struct ContentView: View {
-    @AppStorage("brokerIPAddress") private var ipAddress: String = ""
-    @AppStorage("brokerPort") private var port: String = "1883"
-    @AppStorage("rtspStreamURL") private var rtspStreamURL: String = ""
-    @AppStorage("cameraHTTPURL") private var cameraHTTPURL: String = ""
+    @AppStorage("brokerIPAddress") private var ipAddress: String = "192.168.1.247"
+    @AppStorage("brokerPort") private var port: String = "1884"
+    @AppStorage("rtspStreamURL") private var rtspStreamURL: String = "rtsp://192.168.1.236:8554/stream"
+    @AppStorage("cameraHTTPURL") private var cameraHTTPURL: String = "http://192.168.1.225"
     @AppStorage("didClearLegacyLocalDefaults") private var didClearLegacyLocalDefaults: Bool = false
 
     @StateObject private var mqttManager = MQTTManager()
@@ -181,17 +189,12 @@ struct ContentView: View {
     }
 
     private var configurationTab: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(spacing: 18) {
-                heroCard
-                brokerSettingsCard
-                mqttContractCard
-                logCard
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 18)
-            .padding(.bottom, 24)
-        }
+        ConfigurationTabView(
+            heroCard: heroCard,
+            brokerSettingsCard: brokerSettingsCard,
+            mqttContractCard: mqttContractCard,
+            logCard: logCard
+        )
     }
 
     private var senseHatTab: some View {
@@ -200,7 +203,7 @@ struct ContentView: View {
                 liveTelemetryCard
                 sensorGrid
                 controlsCard
-                ledMatrixCard
+                snakeGameCard
                 diagnosticsCard
             }
             .padding(.horizontal, 18)
@@ -376,54 +379,16 @@ struct ContentView: View {
     }
 
     private var brokerSettingsCard: some View {
-        DashboardPanel(tint: DashboardPalette.blue, badge: "Broker Setup") {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Keep the app pointed at the same MQTT broker as the publishing Sense HAT client.")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.78))
-
-                fieldStack(title: "IP Address", text: $ipAddress, keyboardType: .numbersAndPunctuation)
-                fieldStack(title: "Port", text: $port, keyboardType: .numberPad)
-
-                LazyVGrid(columns: twoColumnLayout, spacing: 12) {
-                    flatActionButton(
-                        title: "Save Settings",
-                        subtitle: "Persist locally",
-                        icon: "tray.and.arrow.down.fill",
-                        tint: DashboardPalette.blue
-                    ) {
-                        saveBrokerSettings()
-                    }
-
-                    flatActionButton(
-                        title: "Connect Now",
-                        subtitle: "Open MQTT session",
-                        icon: "bolt.horizontal.fill",
-                        tint: DashboardPalette.green
-                    ) {
-                        connectUsingSavedSettings(forceReconnect: true)
-                    }
-
-                    flatActionButton(
-                        title: "Disconnect",
-                        subtitle: "Close socket",
-                        icon: "power",
-                        tint: DashboardPalette.rose
-                    ) {
-                        mqttManager.disconnect()
-                    }
-
-                    flatActionButton(
-                        title: "Reset Defaults",
-                        subtitle: "Restore broker values",
-                        icon: "arrow.counterclockwise",
-                        tint: DashboardPalette.amber
-                    ) {
-                        resetDefaults()
-                    }
-                }
-            }
-        }
+        BrokerSettingsCardView(
+            ipAddress: $ipAddress,
+            port: $port,
+            twoColumnLayout: twoColumnLayout,
+            onSave: saveBrokerSettings,
+            onConnect: { connectUsingSavedSettings(forceReconnect: true) },
+            onDisconnect: mqttManager.disconnect,
+            onReset: resetDefaults,
+            buttonBuilder: flatActionButton
+        )
     }
 
     private var mqttContractCard: some View {
@@ -432,15 +397,17 @@ struct ContentView: View {
                 contractRow(label: "Broker", value: "\(ipAddress):\(port)")
                 contractRow(label: "Sense Status", value: mqttManager.senseHatStatusTopic)
                 contractRow(label: "Sense Ctrl", value: mqttManager.senseHatControlTopic)
-                contractRow(label: "Snake Ctrl", value: mqttManager.ledMatrixControlTopic)
-                contractRow(label: "Snake Status", value: mqttManager.ledMatrixStatusTopic)
+                contractRow(label: "Snake Ctrl", value: mqttManager.senseHatControlTopic)
+                contractRow(label: "Snake Status", value: mqttManager.senseHatStatusTopic)
                 contractRow(label: "Pi Monitor", value: mqttManager.piMonitorStatusTopic)
                 contractRow(label: "Cam Ctrl", value: mqttManager.smartCamControlTopic)
                 contractRow(label: "Cam Status", value: mqttManager.smartCamStatusTopic)
+                contractRow(label: "Cam Pan", value: mqttManager.cameraPanTopic)
+                contractRow(label: "Cam Tilt", value: mqttManager.cameraTiltTopic)
                 contractRow(label: "Publisher", value: "The other MQTT clients on the same broker")
                 contractRow(label: "Cadence", value: "~\(mqttManager.publishIntervalSeconds) seconds")
 
-                Text("The Sense HAT tab now polls \(mqttManager.senseHatControlTopic) with read_once, listens for replies on \(mqttManager.senseHatStatusTopic), and keeps \(mqttManager.piMonitorStatusTopic) available for Pi-side diagnostics.")
+                Text("The Sense HAT tab now polls \(mqttManager.senseHatControlTopic) with read_once, uses that same control topic for snake commands, listens for replies on \(mqttManager.senseHatStatusTopic), and keeps \(mqttManager.piMonitorStatusTopic) available for Pi-side diagnostics.")
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.72))
                     .padding(.top, 6)
@@ -560,7 +527,7 @@ struct ContentView: View {
     private var controlsCard: some View {
         DashboardPanel(tint: DashboardPalette.amber, badge: "Command Deck") {
             VStack(alignment: .leading, spacing: 16) {
-                Text("These controls now publish normalized JSON actions to the Pi 3 Sense HAT control topic.")
+                Text("These controls publish the live Sense HAT JSON actions you verified on the Pi 3, including blink, lights_off, read_once, and snake commands.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.78))
 
@@ -576,13 +543,13 @@ struct ContentView: View {
                     }
 
                     commandTile(
-                        title: "Lights On",
-                        subtitle: "Publish lights_on",
+                        title: "Blink",
+                        subtitle: "Publish blink",
                         icon: "lightbulb.max.fill",
                         tint: DashboardPalette.green
                     ) {
                         connectUsingSavedSettingsIfNeeded()
-                        mqttManager.lightsOn()
+                        mqttManager.blinkSenseHat()
                     }
 
                     commandTile(
@@ -632,7 +599,7 @@ struct ContentView: View {
 
                     TextField("Type a message for the Sense HAT display", text: $customMessage)
                         .padding(14)
-                        .background(fieldSurface)
+                        .background(DashboardPalette.fieldFill)
                         .foregroundStyle(.white)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -681,24 +648,24 @@ struct ContentView: View {
         }
     }
 
-    private var ledMatrixCard: some View {
+    private var snakeGameCard: some View {
         DashboardPanel(tint: DashboardPalette.cyan, badge: "Snake Game") {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Use the LED matrix service to start, stop, or inspect the snake game running on the Pi 3.")
+                Text("Use the Sense HAT control topic to start or stop the interactive snake game on the Pi 3.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.78))
 
                 HStack(spacing: 12) {
                     DataHighlightTile(
                         label: "Snake State",
-                        value: mqttManager.ledMatrixState.replacingOccurrences(of: "_", with: " ").capitalized,
+                        value: mqttManager.snakeState.replacingOccurrences(of: "_", with: " ").capitalized,
                         icon: "gamecontroller.fill",
-                        tint: ledMatrixStateTint
+                        tint: snakeStateTint
                     )
 
                     DataHighlightTile(
                         label: "Mode",
-                        value: mqttManager.ledMatrixMode.replacingOccurrences(of: "_", with: " ").capitalized,
+                        value: mqttManager.snakeMode.replacingOccurrences(of: "_", with: " ").capitalized,
                         icon: "square.grid.3x3.fill",
                         tint: DashboardPalette.violet
                     )
@@ -707,7 +674,7 @@ struct ContentView: View {
                 LazyVGrid(columns: twoColumnLayout, spacing: 12) {
                     flatActionButton(
                         title: "Start Snake",
-                        subtitle: "Publish snake",
+                        subtitle: "Publish start_snake",
                         icon: "play.circle.fill",
                         tint: DashboardPalette.green
                     ) {
@@ -717,26 +684,16 @@ struct ContentView: View {
 
                     flatActionButton(
                         title: "Stop Snake",
-                        subtitle: "Publish stop",
+                        subtitle: "Publish stop_snake",
                         icon: "stop.circle.fill",
                         tint: DashboardPalette.rose
                     ) {
                         connectUsingSavedSettingsIfNeeded()
                         mqttManager.stopSnakeGame()
                     }
-
-                    flatActionButton(
-                        title: "Check Status",
-                        subtitle: "Publish status",
-                        icon: "dot.radiowaves.left.and.right",
-                        tint: DashboardPalette.amber
-                    ) {
-                        connectUsingSavedSettingsIfNeeded()
-                        mqttManager.requestSnakeStatus()
-                    }
                 }
 
-                Text(mqttManager.ledMatrixStatusDetail)
+                Text(mqttManager.snakeStatusDetail)
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.72))
             }
@@ -750,8 +707,6 @@ struct ContentView: View {
                 contractRow(label: "Broker", value: mqttManager.activeBrokerSummary)
                 contractRow(label: "Status Topic", value: mqttManager.senseHatStatusTopic)
                 contractRow(label: "Control Topic", value: mqttManager.senseHatControlTopic)
-                contractRow(label: "Snake Ctrl", value: mqttManager.ledMatrixControlTopic)
-                contractRow(label: "Snake Status", value: mqttManager.ledMatrixStatusTopic)
                 contractRow(label: "Monitor Topic", value: mqttManager.piMonitorStatusTopic)
                 contractRow(label: "Last Sent", value: mqttManager.lastSentCommand ?? "None")
                 contractRow(label: "Decode Error", value: mqttManager.lastDecodeError ?? "None")
@@ -790,11 +745,11 @@ struct ContentView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Last LED Matrix Payload")
+                    Text("Last Snake Status Payload")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.78))
 
-                    Text(mqttManager.ledMatrixLastStatusPayload ?? "No LED matrix payload received yet.")
+                    Text(mqttManager.snakeLastStatusPayload ?? "No snake status payload received yet.")
                         .font(.system(.footnote, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.86))
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -811,7 +766,7 @@ struct ContentView: View {
     private var publisherComposerCard: some View {
         DashboardPanel(tint: DashboardPalette.blue, badge: "Composer") {
             VStack(alignment: .leading, spacing: 16) {
-                fieldStack(title: "MQTT Topic", text: $publisherTopic, keyboardType: .alphabet)
+                fieldStack(title: "MQTT Topic", text: $publisherTopic, keyboardType: .default)
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("PAYLOAD")
@@ -821,7 +776,7 @@ struct ContentView: View {
 
                     ZStack(alignment: .topLeading) {
                         RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .fill(fieldSurface)
+                            .fill(DashboardPalette.fieldFill)
 
                         if publisherPayload.isEmpty {
                             Text("Paste a raw message or JSON body here")
@@ -919,22 +874,33 @@ struct ContentView: View {
                     }
 
                     flatActionButton(
-                        title: "LED Matrix Control",
-                        subtitle: "Use snake control topic",
-                        icon: "gamecontroller.fill",
-                        tint: DashboardPalette.cyan
+                        title: "Blink",
+                        subtitle: "Use Sense HAT control",
+                        icon: "lightbulb.max.fill",
+                        tint: DashboardPalette.green
                     ) {
-                        publisherTopic = mqttManager.ledMatrixControlTopic
-                        publisherPayload = #"{"action":"snake"}"#
+                        publisherTopic = mqttManager.senseHatControlTopic
+                        publisherPayload = #"{"action":"blink"}"#
                     }
 
                     flatActionButton(
-                        title: "LED Matrix Status",
-                        subtitle: "Use snake status topic",
-                        icon: "dot.radiowaves.left.and.right",
+                        title: "Snake Start",
+                        subtitle: "Use Sense HAT control",
+                        icon: "gamecontroller.fill",
+                        tint: DashboardPalette.cyan
+                    ) {
+                        publisherTopic = mqttManager.senseHatControlTopic
+                        publisherPayload = #"{"action":"start_snake"}"#
+                    }
+
+                    flatActionButton(
+                        title: "Snake Stop",
+                        subtitle: "Use Sense HAT control",
+                        icon: "stop.circle.fill",
                         tint: DashboardPalette.rose
                     ) {
-                        publisherTopic = mqttManager.ledMatrixStatusTopic
+                        publisherTopic = mqttManager.senseHatControlTopic
+                        publisherPayload = #"{"action":"stop_snake"}"#
                     }
 
                     flatActionButton(
@@ -1137,6 +1103,8 @@ struct ContentView: View {
                 }
 
                 contractRow(label: "Camera URL", value: activeCameraURL ?? cameraHTTPURL)
+                contractRow(label: "Pan Topic", value: mqttManager.cameraPanTopic)
+                contractRow(label: "Tilt Topic", value: mqttManager.cameraTiltTopic)
             }
         }
     }
@@ -1163,6 +1131,58 @@ struct ContentView: View {
                         tint: DashboardPalette.rose
                     ) {
                         stopCameraFeed()
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Camera Motion")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.82))
+
+                    Text("These controls publish camera movement commands to the same MQTT broker session used by the rest of the dashboard.")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.68))
+
+                    LazyVGrid(columns: twoColumnLayout, spacing: 12) {
+                        flatActionButton(
+                            title: "Pan Left",
+                            subtitle: "camera/pan <- left",
+                            icon: "arrow.left.circle.fill",
+                            tint: DashboardPalette.cyan
+                        ) {
+                            connectUsingSavedSettingsIfNeeded()
+                            mqttManager.panCameraLeft()
+                        }
+
+                        flatActionButton(
+                            title: "Pan Right",
+                            subtitle: "camera/pan <- right",
+                            icon: "arrow.right.circle.fill",
+                            tint: DashboardPalette.cyan
+                        ) {
+                            connectUsingSavedSettingsIfNeeded()
+                            mqttManager.panCameraRight()
+                        }
+
+                        flatActionButton(
+                            title: "Tilt Up",
+                            subtitle: "camera/tilt <- up",
+                            icon: "arrow.up.circle.fill",
+                            tint: DashboardPalette.amber
+                        ) {
+                            connectUsingSavedSettingsIfNeeded()
+                            mqttManager.tiltCameraUp()
+                        }
+
+                        flatActionButton(
+                            title: "Tilt Down",
+                            subtitle: "camera/tilt <- down",
+                            icon: "arrow.down.circle.fill",
+                            tint: DashboardPalette.amber
+                        ) {
+                            connectUsingSavedSettingsIfNeeded()
+                            mqttManager.tiltCameraDown()
+                        }
                     }
                 }
 
@@ -1206,20 +1226,11 @@ struct ContentView: View {
     }
 
     private func fieldStack(title: String, text: Binding<String>, keyboardType: UIKeyboardType) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased())
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .tracking(1.2)
-                .foregroundStyle(.white.opacity(0.58))
-
-            TextField(title, text: text)
-                .padding(14)
-                .background(fieldSurface)
-                .foregroundStyle(.white)
-                .keyboardType(keyboardType)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-        }
+        DashboardTextFieldSection(
+            title: title,
+            text: text,
+            keyboardType: keyboardType
+        )
     }
 
     private func flatActionButton(
@@ -1339,17 +1350,6 @@ struct ContentView: View {
         }
     }
 
-    private var fieldSurface: some ShapeStyle {
-        LinearGradient(
-            colors: [
-                Color.white.opacity(0.08),
-                Color.black.opacity(0.18)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-
     private var payloadLooksLikeJSON: Bool {
         let trimmedPayload = publisherPayload.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPayload.isEmpty else {
@@ -1391,8 +1391,8 @@ struct ContentView: View {
         }
     }
 
-    private var ledMatrixStateTint: Color {
-        switch mqttManager.ledMatrixState.lowercased() {
+    private var snakeStateTint: Color {
+        switch mqttManager.snakeState.lowercased() {
         case "waiting_start", "already_running":
             return DashboardPalette.green
         case "requested", "stopping":
@@ -1495,17 +1495,33 @@ struct ContentView: View {
     }
 
     private func resetDefaults() {
-        ipAddress = ""
-        port = "1883"
+        ipAddress = "192.168.1.247"
+        port = "1884"
+        rtspStreamURL = "rtsp://192.168.1.236:8554/stream"
+        cameraHTTPURL = "http://192.168.1.225"
         mqttManager.recordUIEvent("Restored the generic broker defaults.")
     }
 
     private func migrateBrokerDefaultsIfNeeded() {
-        guard !didClearLegacyLocalDefaults else {
-            return
+        if ipAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ipAddress = "192.168.1.247"
         }
 
-        didClearLegacyLocalDefaults = true
+        if port.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            port = "1884"
+        }
+
+        if rtspStreamURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            rtspStreamURL = "rtsp://192.168.1.236:8554/stream"
+        }
+
+        if cameraHTTPURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            cameraHTTPURL = "http://192.168.1.225"
+        }
+
+        if !didClearLegacyLocalDefaults {
+            didClearLegacyLocalDefaults = true
+        }
     }
 
     private func connectUsingSavedSettings(forceReconnect: Bool = false) {
@@ -1736,10 +1752,137 @@ struct ContentView: View {
     }
 }
 
+private struct ConfigurationTabView<Hero: View, Broker: View, TopicMap: View, LogCard: View>: View {
+    let heroCard: Hero
+    let brokerSettingsCard: Broker
+    let mqttContractCard: TopicMap
+    let logCard: LogCard
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 18) {
+                heroCard
+                brokerSettingsCard
+                mqttContractCard
+                logCard
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 18)
+            .padding(.bottom, 24)
+        }
+    }
+}
+
+private struct BrokerSettingsCardView<ButtonContent: View>: View {
+    @Binding var ipAddress: String
+    @Binding var port: String
+    let twoColumnLayout: [GridItem]
+    let onSave: () -> Void
+    let onConnect: () -> Void
+    let onDisconnect: () -> Void
+    let onReset: () -> Void
+    let buttonBuilder: (_ title: String, _ subtitle: String, _ icon: String, _ tint: Color, _ action: @escaping () -> Void) -> ButtonContent
+
+    var body: some View {
+        DashboardPanel(tint: DashboardPalette.blue, badge: "Broker Setup") {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Keep the app pointed at the same MQTT broker as the publishing Sense HAT client.")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.78))
+
+                DashboardTextFieldSection(
+                    title: "IP Address",
+                    text: $ipAddress,
+                    keyboardType: .numbersAndPunctuation
+                )
+                DashboardTextFieldSection(
+                    title: "Port",
+                    text: $port,
+                    keyboardType: .numberPad
+                )
+
+                LazyVGrid(columns: twoColumnLayout, spacing: 12) {
+                    buttonBuilder(
+                        "Save Settings",
+                        "Persist locally",
+                        "tray.and.arrow.down.fill",
+                        DashboardPalette.blue,
+                        onSave
+                    )
+
+                    buttonBuilder(
+                        "Connect Now",
+                        "Open MQTT session",
+                        "bolt.horizontal.fill",
+                        DashboardPalette.green,
+                        onConnect
+                    )
+
+                    buttonBuilder(
+                        "Disconnect",
+                        "Close socket",
+                        "power",
+                        DashboardPalette.rose,
+                        onDisconnect
+                    )
+
+                    buttonBuilder(
+                        "Reset Defaults",
+                        "Restore broker values",
+                        "arrow.counterclockwise",
+                        DashboardPalette.amber,
+                        onReset
+                    )
+                }
+            }
+        }
+    }
+}
+
+private struct DashboardTextFieldSection: View {
+    let title: String
+    @Binding var text: String
+    let keyboardType: UIKeyboardType
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .tracking(1.2)
+                .foregroundStyle(.white.opacity(0.58))
+
+            TextField(title, text: $text)
+                .padding(14)
+                .background(DashboardFieldBackground())
+                .foregroundStyle(.white)
+                .keyboardType(keyboardType)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+        }
+    }
+}
+
+private struct DashboardFieldBackground: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 20, style: .continuous)
+            .fill(DashboardPalette.fieldFill)
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+    }
+}
+
 private struct DashboardPanel<Content: View>: View {
     let tint: Color
     let badge: String
-    @ViewBuilder var content: Content
+    let content: Content
+
+    init(tint: Color, badge: String, @ViewBuilder content: () -> Content) {
+        self.tint = tint
+        self.badge = badge
+        self.content = content()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
